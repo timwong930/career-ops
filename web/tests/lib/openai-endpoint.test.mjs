@@ -41,3 +41,8 @@ test("parses canonical evaluation metadata and strips an outer markdown fence", 
   const report = stripOuterMarkdownFence(`\`\`\`markdown\n# Evaluation: Acme — Project Manager\n\n**Score:** 4.3/5\n\`\`\``);
   assert.deepEqual(parseEvaluationMetadata(report), { company: "Acme", role: "Project Manager", score: 4.3 });
 });
+
+test("accepts cosmetic bolding around a local model score", () => {
+  const report = "# Evaluation: Acme — Project Manager\n\n**Score:** **4.3/5**";
+  assert.deepEqual(parseEvaluationMetadata(report), { company: "Acme", role: "Project Manager", score: 4.3 });
+});
