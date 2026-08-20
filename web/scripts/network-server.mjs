@@ -9,7 +9,9 @@ import { buildNetworkAllowedHosts, parseExtraHosts } from "../src/lib/network-ho
 const mode = process.argv[2] === "dev" ? "dev" : "start";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(here, "..");
-const port = String(process.env.PORT || "3000");
+// LAN/headless mode intentionally defaults away from Next's conventional 3000
+// so it can coexist with other local dashboards. Override with PORT=... when needed.
+const port = String(process.env.PORT || "2000");
 
 function tailscaleStatus() {
   try {
