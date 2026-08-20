@@ -33,6 +33,12 @@ type Ctx = {
   clearFinished: () => void;
 };
 
+type ServerAiConfig = {
+  mode?: "cli" | "endpoint";
+  cliId?: string;
+  endpoint?: { baseUrl?: string; model?: string };
+};
+
 const JobsContext = createContext<Ctx | null>(null);
 export function useJobs() {
   const c = useContext(JobsContext);
@@ -41,6 +47,7 @@ export function useJobs() {
 }
 
 const JOBS_KEY = "career-ops:jobs";
+const ENDPOINT_KEY_SESSION = "career-ops:endpoint-api-key";
 
 function parseVerdict(text: string): JobResult {
   const m = text.match(/VERDICT:\s*([\d.]+)\s*\/\s*5\s*[—:|-]+\s*(.+)/i);
@@ -54,6 +61,17 @@ function parseVerdict(text: string): JobResult {
     return { score, summary: "", tone: scoreTone(`${score}`) };
   }
   return { score: null, summary: "", tone: "muted" };
+}
+
+async function readServerAiConfig(): Promise<ServerAiConfig> {
+  try {
+    const response = await fetch("/api/ai/config", { cache: "no-store" });
+    if (!response.ok) return {};
+    const payload = await response.json();
+    return payload?.config ?? {};
+  } catch {
+    return {};
+  }
 }
 
 export function JobsProvider({ children }: { children: React.ReactNode }) {
@@ -109,16 +127,39 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
       setJobs((js) => [job, ...js]);
 
       (async () => {
-        const cliId = readSavedCliId() || (await resolveCliId());
-        if (!cliId) {
-          patch(id, (j) => ({
-            ...j,
-            status: "error",
-            endedAt: Date.now(),
-            steps: [...j.steps, { kind: "status", label: "No CLI configured — open Config and click Save config", ts: Date.now() }],
-          }));
-          return;
+        const serverConfig = await readServerAiConfig();
+        let route = "/api/run";
+        let requestBody: Record<string, unknown>;
+
+        // A plain OpenAI-compatible endpoint is intentionally used for inference
+        // work only. Tool-heavy worker kinds still fall back to an installed CLI.
+        if (serverConfig.mode === "endpoint" && opts.kind === "evaluate") {
+          route = "/api/run/endpoint";
+          let apiKey = "";
+          try { apiKey = sessionStorage.getItem(ENDPOINT_KEY_SESSION) || ""; } catch { /* private mode */ }
+          requestBody = { kind: opts.kind, input: opts.input, apiKey };
+        } else {
+          const cliId = serverConfig.mode === "cli" && serverConfig.cliId
+            ? serverConfig.cliId
+            : readSavedCliId() || (await resolveCliId());
+          if (!cliId) {
+            patch(id, (j) => ({
+              ...j,
+              status: "error",
+              endedAt: Date.now(),
+              steps: [...j.steps, {
+                kind: "status",
+                label: serverConfig.mode === "endpoint"
+                  ? "This action needs an agent CLI — install/select one in Settings"
+                  : "No AI engine configured — open Settings and choose one",
+                ts: Date.now(),
+              }],
+            }));
+            return;
+          }
+          requestBody = { kind: opts.kind, input: opts.input, cliId };
         }
+
         let text = "";
         let verdictLine = ""; // latched separately so the 8000-char tail can't drop it
         let doneTokens = 0; // per-run token cost, forwarded on the done event (#6)
@@ -151,10 +192,10 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
         };
 
         try {
-          const res = await fetch("/api/run", {
+          const res = await fetch(route, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ kind: opts.kind, input: opts.input, cliId }),
+            body: JSON.stringify(requestBody),
           });
           if (!res.ok || !res.body) {
             const e = await res.json().catch(() => ({}));
