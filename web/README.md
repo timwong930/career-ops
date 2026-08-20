@@ -69,23 +69,66 @@ connect to this Mac on the trusted network. Do not expose port 3000 to the publi
 internet. Prefer Tailscale ACLs / Serve for remote access; do not use Tailscale
 Funnel for this app.
 
+## Local AI / oMLX
+
+The web UI can use a local **OpenAI-compatible endpoint** for job evaluation,
+without requiring Codex or Claude for that workflow. This is designed for a
+headless Mac running oMLX, but the same path works with compatible inference
+servers on loopback, the trusted LAN, or Tailscale.
+
+In **Settings → AI Engine → Local / custom endpoint**:
+
+1. Enter the base URL. The oMLX default is:
+
+   ```text
+   http://127.0.0.1:8000/v1
+   ```
+
+2. Click **Test connection & load models**. The server calls `/v1/models` from
+   the Mac that runs Career-Ops, so a phone connected over Tailscale can still
+   configure an oMLX process bound only to the Mac's localhost interface.
+3. Pick a model and click **Save settings**.
+4. Paste a job URL into **Evaluate a Job**. Career-Ops reads the job page,
+   combines it with `modes/oferta.md`, `config/profile.yml`, and `cv.md`, calls
+   `/v1/chat/completions`, then saves the report/tracker entry through trusted
+   backend code.
+
+The endpoint/model choice is persisted in `data/web-ai.json`, which is already
+covered by the repository's `data/*` ignore rule. Optional API keys are **not**
+written to disk; they live only in the current browser session.
+
+Custom endpoint URLs are intentionally restricted to loopback, private-LAN,
+`.local`, and Tailscale addresses. This prevents the dashboard's API from becoming
+an arbitrary outbound proxy.
+
+**Current scope:** direct OpenAI-compatible inference handles job evaluation.
+Tool-heavy actions (for example CV generation or workflows that truly require
+browser/shell/file tools) continue to use an installed agent CLI when available.
+
 ## What works today
 
-- **Pipeline** — your tracker as a sortable, filterable table; status changes
+- **Applications** — your tracker as a sortable, filterable table; status changes
   write back through the core's own scripts.
-- **Explore** — the free reverse-ATS scan with an honest partial-dataset
-  indicator, plus AI-assisted discovery (bring your own CLI/keys).
+- **Discover** — the free reverse-ATS scan with an honest partial-dataset
+  indicator, plus AI-assisted discovery.
+- **Evaluate** — score a job through an installed agent CLI or a local
+  OpenAI-compatible endpoint such as oMLX.
 - **Apply** — assisted form prefill with a hard rule inherited from the core:
   **it never submits for you** — you always press the button.
-- **Today / Analytics / CV / Config** — action queue, funnel, CV editing with
-  preview, settings.
+- **Overview / Analytics / Resume / Settings** — action queue, funnel, CV editing
+  with preview, and configuration.
 
 ## Safety
 
 - **Local-first:** the local web app runs entirely on your machine — no cloud,
-  no account needed. Your CV and data stay in your own files.
+  no account needed. Your CV and data stay in your own files unless you choose a
+  non-local AI provider.
 - **Never auto-submits:** the apply flow drafts and prefills; submitting is
   always a human action.
+- **Local endpoint writes stay backend-owned:** the inference model receives the
+  evaluation context and returns report text; it never receives shell or file
+  tools. Career-Ops validates the response and performs report/tracker writes
+  itself.
 - **CV generation never asks the agent to write:** the `pdf` worker tailors your
   CV and emits it inline in a `<<cv-html>>` envelope; the backend parses that
   envelope, writes the HTML, and renders the PDF itself. Job postings and
