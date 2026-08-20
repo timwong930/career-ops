@@ -74,7 +74,10 @@ export function parseModelIds(payload) {
 export function parseEvaluationMetadata(report) {
   const text = String(report ?? "");
   const title = text.match(/^#\s*Evaluation:\s*(.+?)\s+(?:—|–|-)\s+(.+?)\s*$/mi);
-  const score = text.match(/^\*\*Score:\*\*\s*([0-5](?:\.\d+)?)\s*\/\s*5\s*$/mi);
+  // Local models occasionally add emphasis around the value even when the
+  // canonical template says not to. Accept that cosmetic variation while still
+  // requiring a real 0–5 score and the canonical Score header.
+  const score = text.match(/^\*\*Score:\*\*\s*\*{0,2}\s*([0-5](?:\.\d+)?)\s*\/\s*5\s*\*{0,2}\s*$/mi);
   if (!title || !score) return null;
   const value = Number(score[1]);
   if (!Number.isFinite(value) || value < 0 || value > 5) return null;
