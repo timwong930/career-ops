@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -18,6 +17,14 @@ function cliId(): string | null {
     return JSON.parse(localStorage.getItem("career-ops:config") || "{}").cliId || null;
   } catch {
     return null;
+  }
+}
+
+function endpointApiKey(): string {
+  try {
+    return sessionStorage.getItem("career-ops:endpoint-api-key") || "";
+  } catch {
+    return "";
   }
 }
 
@@ -40,20 +47,20 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
 
   const readiness = md ? cvReadiness(md) : null;
 
-  // Stream the ingest, parsing markers live.
   const runStream = useCallback(async (init: RequestInit) => {
     setPhase("parsing");
     setTrace("Reading your CV…");
     setErr("");
     try {
       const r = await fetch("/api/cv/ingest", init);
-      if (r.status === 404) {
-        setErr("Connect an AI CLI in Config first — it parses your CV locally.");
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        setErr(data.error || `Couldn't import the CV (HTTP ${r.status}).`);
         setPhase("error");
         return;
       }
       if (!r.body) {
-        setErr("No response.");
+        setErr("No response from the CV importer.");
         setPhase("error");
         return;
       }
@@ -66,7 +73,11 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         buf += dec.decode(value, { stream: true });
         const parsed = parseCvStream(buf);
         if (parsed.error) {
-          setErr(parsed.error === "unreadable" ? "I couldn't read text from that file (it may be a scanned image). Paste the text instead." : "Couldn't parse the CV — paste the text instead.");
+          setErr(
+            parsed.error === "unreadable"
+              ? "I couldn't extract readable text from that file. If it is a scanned PDF, paste the resume text instead."
+              : "Couldn't parse the CV. Your original file was not changed.",
+          );
           setPhase("error");
           return;
         }
@@ -76,7 +87,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       }
       const final = parseCvStream(buf);
       if (!final.markdown.trim()) {
-        setErr("Couldn't read a CV there — paste the text instead.");
+        setErr("No resume text was found. If this is a scanned PDF, paste the text instead.");
         setPhase("error");
         return;
       }
@@ -84,7 +95,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       setSeed(final.seed);
       setPhase("review");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "stream error");
+      setErr(e instanceof Error ? e.message : "CV import failed");
       setPhase("error");
     }
   }, []);
@@ -96,20 +107,18 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       setPhase("error");
       return;
     }
-    // Pasted text is already readable. Same path as a .md/.txt drop — no CLI.
-    // (PDF/DOCX still need a CLI below.)
-    const id = cliId();
-    if (!id) {
-      setSeed(null);
-      setMd(trimmed);
-      setPhase("review");
-      return;
-    }
-    void runStream({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: trimmed, cliId: id }) });
+
+    // The server may use the selected local endpoint to normalize the text, but
+    // readable pasted text always has a deterministic raw-text fallback. A stale
+    // CLI choice can therefore never turn a valid paste into "unreadable".
+    void runStream({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: trimmed, cliId: cliId() || "", apiKey: endpointApiKey() }),
+    });
   };
 
   const ingestFile = (file: File) => {
-    // .md/.txt/.markdown fast path — plain text, NO CLI needed, instant.
     if (/\.(md|markdown|txt)$/i.test(file.name)) {
       file
         .text()
@@ -129,16 +138,15 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         });
       return;
     }
-    // PDF/other → the user's CLI parses it. Needs a configured CLI.
-    const id = cliId();
-    if (!id) {
-      setErr("needs-cli");
-      setPhase("error");
-      return;
-    }
+
+    // PDF/DOCX are uploaded only to the Career-Ops server on this machine. On
+    // macOS, PDFKit/textutil extracts their text locally before any AI cleanup.
     const form = new FormData();
     form.append("file", file);
-    form.append("cliId", id);
+    const id = cliId();
+    if (id) form.append("cliId", id);
+    const key = endpointApiKey();
+    if (key) form.append("apiKey", key);
     void runStream({ method: "POST", body: form });
   };
 
@@ -155,7 +163,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setSaveErr(d.error || "Couldn't save your CV — try again.");
-        setPhase("review"); // keep the parsed CV so they don't lose it
+        setPhase("review");
         return;
       }
     } catch {
@@ -164,18 +172,12 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       return;
     }
     onSaved?.();
-    // WOW #1 — land in the Explorer with the CV-derived filters in the URL + run=1,
-    // so the Explorer auto-fires the FREE scan itself (robust, no push/replaceState race).
-    // GENEROUS first scan so it never comes back empty (that would kill the wow): roles
-    // only + a wide 30-day window; location stays a refinement for the deepen step, NOT a
-    // hard exclude (allow=[] passes everything). Recall over precision for the first reveal.
     const roles = seed?.roles?.length ? seed.roles : seed?.title ? [seed.title] : [];
     const f = { ...DEFAULT_FILTERS, ats: [...DEFAULT_FILTERS.ats], positive: roles, sinceDays: 30 };
     const qs = filtersToParams(f);
     router.push(`/explore?${qs}${qs ? "&" : ""}run=1`);
   };
 
-  // ── INPUT ──
   if (phase === "input" || phase === "error") {
     return (
       <div className="space-y-3">
@@ -201,7 +203,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && paste.trim()) ingestText(paste.trim());
             }}
-            placeholder="Paste your CV here — or drop a PDF / .md file below. Even a rough paste works; we'll clean it up."
+            placeholder="Paste your CV here — or drop a PDF / Word / .md file below. Even a rough paste works."
             className="h-32 w-full resize-none bg-transparent text-[14px] leading-relaxed outline-none placeholder:text-faint"
           />
           <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border pt-3">
@@ -212,9 +214,9 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
             >
               <Upload className="size-3.5" /> Upload PDF / file
             </button>
-            <input ref={fileRef} type="file" accept=".pdf,.md,.markdown,.txt,.docx" hidden onChange={(e) => e.target.files?.[0] && ingestFile(e.target.files[0])} />
+            <input ref={fileRef} type="file" accept=".pdf,.md,.markdown,.txt,.doc,.docx,.rtf" hidden onChange={(e) => e.target.files?.[0] && ingestFile(e.target.files[0])} />
             <span className="inline-flex items-center gap-1 text-[11px] text-faint">
-              <Lock className="size-3" /> Stays on your machine. Parsed by your own AI.
+              <Lock className="size-3" /> File stays on your Career-Ops Mac; PDF text is extracted locally.
             </span>
             <button
               type="button"
@@ -226,25 +228,15 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
             </button>
           </div>
         </div>
-        {phase === "error" &&
-          (err === "needs-cli" ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[13px] text-amber-700 dark:text-amber-300">
-              <AlertTriangle className="size-3.5 shrink-0" />
-              <span>To read a PDF or Word file, connect an AI CLI in Config. Paste or drop .md / .txt to start without one.</span>
-              <Link href="/config" className="ml-auto inline-flex items-center gap-1 rounded-md bg-amber-500/20 px-2.5 py-1 font-medium text-amber-700 transition hover:bg-amber-500/30 dark:text-amber-200">
-                Connect your AI CLI <ArrowRight className="size-3.5" />
-              </Link>
-            </div>
-          ) : (
-            <p className="flex items-center gap-1.5 text-[13px] text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="size-3.5 shrink-0" /> {err}
-            </p>
-          ))}
+        {phase === "error" && (
+          <p className="flex items-center gap-1.5 text-[13px] text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="size-3.5 shrink-0" /> {err}
+          </p>
+        )}
       </div>
     );
   }
 
-  // ── PARSING (the 10s bridge) ──
   if (phase === "parsing") {
     return (
       <div className="rounded-2xl border border-border bg-surface/60 p-6 backdrop-blur-sm">
@@ -254,14 +246,13 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
           <span className={`${instrumentSerif.className} text-lg text-foreground`}>{trace || "Reading your CV…"}</span>
         </div>
         <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-          <span className="size-1.5 rounded-full bg-emerald-500" /> 0 tokens · $0.00 · local
+          <span className="size-1.5 rounded-full bg-emerald-500" /> Local processing · no external upload
         </div>
         {md && <div className="co-cvtrace mt-4 max-h-40 overflow-hidden rounded-lg border border-border bg-surface/40 p-3 text-[11px] text-faint">{md.slice(0, 400)}…</div>}
       </div>
     );
   }
 
-  // ── REVIEW (propose → confirm) ──
   return (
     <div className="rounded-2xl border border-border bg-surface/60 p-4 backdrop-blur-sm md:p-5">
       <style>{STYLE}</style>
