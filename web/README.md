@@ -19,7 +19,7 @@ npm ci
 npm run dev
 ```
 
-Open http://localhost:3000. The app reads the career-ops checkout it lives in
+Open http://localhost:2000. The app reads the career-ops checkout it lives in
 (the parent directory) — your existing CV, pipeline and reports appear as-is.
 
 ## LAN, headless Macs, and Tailscale
@@ -146,7 +146,7 @@ browser/shell/file tools) continue to use an installed agent CLI when available.
 ## Development
 
 ```bash
-npm run dev          # loopback-safe dev server (Turbopack, port 3000)
+npm run dev          # loopback-safe dev server (Turbopack, port 2000)
 npm run dev:lan      # trusted LAN/Tailscale dev server (port 2000)
 npm test             # unit suites (node --test, no framework)
 npx tsc --noEmit     # typecheck
