@@ -22,6 +22,53 @@ npm run dev
 Open http://localhost:3000. The app reads the career-ops checkout it lives in
 (the parent directory) — your existing CV, pipeline and reports appear as-is.
 
+## LAN, headless Macs, and Tailscale
+
+The normal `dev` / `start` commands keep the API's loopback-only safety policy.
+For a trusted home LAN or a headless machine, use the explicit network commands:
+
+```bash
+# Development / live reload
+npm run dev:lan
+
+# Recommended for a headless machine
+npm run build
+npm run start:lan
+```
+
+`dev:lan` and `start:lan` bind Next.js to `0.0.0.0` and automatically allow the
+server's own non-loopback interface addresses, macOS hostname / `.local` name,
+and — when the Tailscale CLI is available — its Tailscale IPs and MagicDNS name.
+The existing same-origin API guard remains enabled.
+
+From another device on the LAN, open either:
+
+```text
+http://<mac-lan-ip>:3000
+http://<mac-hostname>.local:3000
+```
+
+For remote access over your tailnet, direct access to the Mac's Tailscale IP or
+MagicDNS name works as well. For a stable HTTPS URL, Tailscale Serve is preferred:
+
+```bash
+tailscale serve --bg 3000
+```
+
+Tailscale will proxy its HTTPS MagicDNS URL to `127.0.0.1:3000` and persist the
+Serve configuration across restarts. If the Tailscale CLI is not discoverable by
+Node, add a custom DNS name explicitly when launching:
+
+```bash
+CAREER_OPS_WEB_ALLOWED_HOSTS=mac-studio.example.ts.net npm run start:lan
+```
+
+**Security note:** the web UI can run Career-Ops workers and write your local
+career files. `start:lan` intentionally makes it reachable by devices that can
+connect to this Mac on the trusted network. Do not expose port 3000 to the public
+internet. Prefer Tailscale ACLs / Serve for remote access; do not use Tailscale
+Funnel for this app.
+
 ## What works today
 
 - **Pipeline** — your tracker as a sortable, filterable table; status changes
@@ -55,10 +102,12 @@ Open http://localhost:3000. The app reads the career-ops checkout it lives in
 ## Development
 
 ```bash
-npm run dev          # dev server (Turbopack)
+npm run dev          # loopback-safe dev server (Turbopack)
+npm run dev:lan      # trusted LAN/Tailscale dev server
 npm test             # unit suites (node --test, no framework)
 npx tsc --noEmit     # typecheck
 npm run build        # production build
+npm run start:lan    # production server for trusted LAN/Tailscale access
 ```
 
 Set `CAREER_OPS_ROOT=/path/to/checkout` in `web/.env.local` to point the app at
