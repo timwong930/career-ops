@@ -8,23 +8,15 @@ export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
 export { ATS_SOURCES } from "@/lib/explore";
 
 /**
- * ACL for the discovery engine — orchestrates the REAL core scanner
- * `scan-ats-full.mjs` (reverse ATS discovery, a contract entry-point). We run it
- * with `--dry-run` so it writes NOTHING (the user reviews + chooses), point it at
- * an EPHEMERAL filter file (never the user's portals.yml), and surface its results.
+ * Web adapter for the core reverse-ATS scanner. The web always runs dry-run
+ * against an ephemeral portals file, so Discover cannot mutate pipeline data.
  *
- * DISCOVERY IS FREE — zero LLM tokens (pure HTTP + JSON). Only evaluation costs
- * tokens, and that is triggered explicitly elsewhere.
- *
- * Two parse paths, chosen by probing the local scanner's source:
- *  • `--json` (#1199): stdout = ONE authoritative object (human progress → stderr),
- *    carrying capHit / datasetStatus / postingsDroppedNoDate so we can tell a
- *    DEGRADED scan (capped, stale/unreachable dataset, postings dropped for no date)
- *    from a genuinely EMPTY one. Preferred.
- *  • legacy: older local checkouts lack `--json`; we parse the human stdout text
- *    (convenient but not formally stable) and infer a looser summary.
+ * Important: the UI intentionally caps each ATS for an interactive response.
+ * The core scanner's default capped behavior is the alphabetical prefix of the
+ * company directory, which makes every run inspect the same tiny A-first slice.
+ * We therefore pass --shuffle for web scans so the cap is a representative
+ * sample instead of a deterministic alphabetical bias.
  */
-
 const OFFER_RE = /^\s*\+\s+\[([^\]]+)\]\s+(\S+)\s+\|\s+(.+)$/;
 const ATS_START_RE = /⚙\s+(\S+)\s+—\s+(\d+)\s+companies/;
 const PROGRESS_RE = /(\d+)\/(\d+)\s+scanned,\s+(\d+)\s+total matches/;
@@ -56,9 +48,6 @@ function parseOfferLine(source: string, date: string, rest: string): Omit<Discov
   };
 }
 
-// Does the user's LOCAL scanner support the --json contract (#1199)? Probe the
-// source (cheap, no spawn) so older checkouts fall back instead of breaking on an
-// unknown flag — the web is local-first, so the version is whatever they installed.
 export function scannerSupportsJson(): boolean {
   try {
     const src = fs.readFileSync(rootScript("scan-ats-full"), "utf8");
@@ -68,7 +57,15 @@ export function scannerSupportsJson(): boolean {
   }
 }
 
-type JsonOffer = { company?: string; title?: string; url?: string; location?: string | null; postedAt?: string | null; source?: string };
+type JsonOffer = {
+  company?: string;
+  title?: string;
+  url?: string;
+  location?: string | null;
+  postedAt?: string | null;
+  source?: string;
+};
+
 type ScanJson = {
   companiesAvailable?: number;
   companiesScanned?: number;
@@ -80,10 +77,21 @@ type ScanJson = {
   offers?: JsonOffer[];
 };
 
+function usefulErrorTail(value: string): string {
+  const lines = value
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s) => !/^\d+\/\d+ scanned/i.test(s));
+  return lines.slice(-4).join(" · ").slice(0, 700);
+}
+
 export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) => void): Promise<DiscoveredOffer[]> {
   return new Promise((resolve) => {
     const tempPortals = writeTempPortals(filters);
-    const ats = (filters.ats.length ? filters.ats : [...ATS_SOURCES]).filter((a) => (ATS_SOURCES as readonly string[]).includes(a));
+    const ats = (filters.ats.length ? filters.ats : [...ATS_SOURCES]).filter((a) =>
+      (ATS_SOURCES as readonly string[]).includes(a),
+    );
     const useJson = scannerSupportsJson();
     const args = [
       rootScript("scan-ats-full"),
@@ -94,6 +102,9 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
       ats.join(","),
       "--limit",
       String(Math.max(1, filters.limitPerAts || 150)),
+      // The core's capped default is list.slice(0, limit), i.e. alphabetical.
+      // Interactive web scans should not re-scan the same A-first companies.
+      "--shuffle",
     ];
     if (useJson) args.push("--json");
 
@@ -104,24 +115,27 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
 
     const offers: DiscoveredOffer[] = [];
     const seen = new Set<string>();
-    let currentAts: string = ats[0] || "";
+    let currentAts = ats[0] || "";
     let pending: Omit<DiscoveredOffer, "url"> | null = null;
     let companiesScanned = 0;
     let unreachable = 0;
     let outBuf = "";
     let errBuf = "";
-    let jsonOut = ""; // --json mode: the single stdout object accumulates here
+    let stderrAll = "";
+    let jsonOut = "";
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      cleanupTempPortals(tempPortals);
+      resolve(offers);
+    };
 
     const killer = setTimeout(() => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* ignore */
-      }
+      try { child.kill("SIGTERM"); } catch { /* ignore */ }
     }, 230_000);
 
-    // Live progress (atsStart / progress / atsDone) — in --json mode these human
-    // lines arrive on STDERR; in legacy mode on STDOUT (handled inside handleLine).
     const handleProgressLine = (line: string) => {
       const atsM = line.match(ATS_START_RE);
       if (atsM) {
@@ -135,9 +149,7 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
         return;
       }
       const doneAtsM = line.match(ATS_DONE_RE);
-      if (doneAtsM) {
-        onEvent({ kind: "atsDone", ats: currentAts, unreachable: Number(doneAtsM[1]) });
-      }
+      if (doneAtsM) onEvent({ kind: "atsDone", ats: currentAts, unreachable: Number(doneAtsM[1]) });
     };
 
     const handleLine = (line: string) => {
@@ -146,7 +158,11 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
         const url = trimmed.split(/\s+/)[0];
         if (!seen.has(url)) {
           seen.add(url);
-          const offer: DiscoveredOffer = { ...pending, url, matchedKeyword: firstMatch(pending.title, filters.positive) };
+          const offer: DiscoveredOffer = {
+            ...pending,
+            url,
+            matchedKeyword: firstMatch(pending.title, filters.positive),
+          };
           offers.push(offer);
           onEvent({ kind: "offer", offer });
         }
@@ -187,15 +203,12 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
         return;
       }
       const sumM = line.match(SUMMARY_RE);
-      if (sumM) {
-        onEvent({ kind: "summary", companiesScanned, unreachable, matches: Number(sumM[1]) });
-        return;
-      }
+      if (sumM) onEvent({ kind: "summary", companiesScanned, unreachable, matches: Number(sumM[1]) });
     };
 
     child.stdout.on("data", (d: Buffer) => {
       if (useJson) {
-        jsonOut += d.toString(); // one JSON object — parsed at close
+        jsonOut += d.toString();
         return;
       }
       outBuf += d.toString();
@@ -203,26 +216,30 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
       outBuf = parts.pop() ?? "";
       for (const p of parts) handleLine(p);
     });
+
     child.stderr.on("data", (d: Buffer) => {
-      errBuf += d.toString();
+      const chunk = d.toString();
+      stderrAll = (stderrAll + chunk).slice(-12_000);
+      errBuf += chunk;
       const parts = errBuf.split(/\r?\n/);
       errBuf = parts.pop() ?? "";
       for (const p of parts) {
         if (!p.trim()) continue;
-        if (useJson) handleProgressLine(p); // human progress lives on stderr in --json mode
+        if (useJson) handleProgressLine(p);
         onEvent({ kind: "log", line: p.trim() });
       }
     });
 
     child.on("error", (e) => {
       clearTimeout(killer);
-      cleanupTempPortals(tempPortals);
       onEvent({ kind: "error", message: e instanceof Error ? e.message : "scanner failed to start" });
-      resolve(offers);
+      finish();
     });
-    child.on("close", () => {
+
+    child.on("close", (code, signal) => {
       clearTimeout(killer);
-      cleanupTempPortals(tempPortals);
+      if (finished) return;
+
       if (useJson) {
         let j: ScanJson | null = null;
         try {
@@ -230,6 +247,7 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
         } catch {
           j = null;
         }
+
         if (j && Array.isArray(j.offers)) {
           for (const o of j.offers) {
             const url = (o.url || "").trim();
@@ -260,15 +278,23 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
             postingsDroppedNoDate: j.postingsDroppedNoDate,
           });
         } else {
-          // --json requested but stdout didn't parse — surface honestly rather than
-          // silently returning 0 (defensive; shouldn't happen once the probe passed).
-          onEvent({ kind: "error", message: "The scanner returned no readable output." });
+          const tail = usefulErrorTail(stderrAll);
+          const exit = signal ? `signal ${signal}` : `exit ${code ?? "?"}`;
+          onEvent({
+            kind: "error",
+            message: tail ? `Scanner failed (${exit}): ${tail}` : `Scanner returned no readable output (${exit}).`,
+          });
         }
-        resolve(offers);
+        finish();
         return;
       }
+
       if (outBuf.trim()) handleLine(outBuf);
-      resolve(offers);
+      if ((code ?? 0) !== 0) {
+        const tail = usefulErrorTail(stderrAll);
+        onEvent({ kind: "error", message: tail ? `Scanner failed (exit ${code}): ${tail}` : `Scanner failed with exit ${code}.` });
+      }
+      finish();
     });
   });
 }
