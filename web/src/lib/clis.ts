@@ -33,6 +33,27 @@ export type CliSpec = {
   stderrIsFatal?: (line: string) => boolean;
 };
 
+function careerRootForConfig(): string {
+  const env = process.env.CAREER_OPS_ROOT?.trim();
+  return env || path.resolve(process.cwd(), "..");
+}
+
+function localEndpointConfigured(): boolean {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(/*turbopackIgnore: true*/ path.join(careerRootForConfig(), "data", "web-ai.json"), "utf8"));
+    return cfg?.mode === "endpoint" && Boolean(cfg?.endpoint?.baseUrl) && Boolean(cfg?.endpoint?.model);
+  } catch {
+    return false;
+  }
+}
+
+function localEndpointAdapterArgs(prompt: string): string[] {
+  // Next runs with web/ as cwd. Use an absolute script path because the
+  // assistant child itself is launched with cwd changed to the Career-Ops root.
+  const script = path.resolve(process.cwd(), "scripts", "omlx-assistant-cli.mjs");
+  return [script, prompt];
+}
+
 /**
  * NO RUNTIME HERE MAY GRANT ITSELF MORE PERMISSION THAN THE AUDITED ONE.
  *
@@ -57,6 +78,10 @@ export type CliSpec = {
  * lives in a comment is a rule the next contributor may never read.
  */
 export const KNOWN: CliSpec[] = [
+  // Synthetic runtime for the assistant only: Node invokes a tiny adapter that
+  // calls the server's saved OpenAI-compatible endpoint (e.g. oMLX). It has no
+  // shell/browser/filesystem tools; the adapter supplies bounded local context.
+  { id: "omlx", name: "Local endpoint (oMLX)", bin: "node", run: "OpenAI-compatible /v1", url: "https://github.com/jundot/omlx", args: localEndpointAdapterArgs },
   { id: "claude", name: "Claude Code", bin: "claude", run: "claude -p", url: "https://claude.ai/code", args: (p) => ["-p", p], parseEvent: parseClaudeEvent, stderrIsFatal: isFatalClaudeStderr },
   { id: "codex", name: "Codex", bin: "codex", run: "codex exec", url: "https://github.com/openai/codex", args: (p) => ["exec", p], streamArgs: codexStreamArgs, parseEvent: parseCodexEvent, stderrIsFatal: isFatalCodexStderr },
   { id: "gemini", name: "Gemini CLI", bin: "gemini", run: "gemini -p", url: "https://github.com/google-gemini/gemini-cli", args: (p) => ["-p", p] },
@@ -85,22 +110,19 @@ function searchDirs(): string[] {
   ];
   if (process.platform === "win32") {
     // Windows CLIs frequently install under per-user AppData roots and don't
-    // reliably add themselves to PATH (e.g. Antigravity → %LOCALAPPDATA%\agy\bin).
+    // reliably add themselves to PATH (e.g. Antigravity → %LOCALAPPDATA%\\agy\\bin).
     const localAppData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
     const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
     extra.push(
-      path.join(localAppData, "agy", "bin"), // Antigravity CLI
-      path.join(localAppData, "Microsoft", "WindowsApps"), // winget/Store shims
-      path.join(appData, "npm"), // npm global prefix on Windows
+      path.join(localAppData, "agy", "bin"),
+      path.join(localAppData, "Microsoft", "WindowsApps"),
+      path.join(appData, "npm"),
     );
   }
   const fromPath = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
   return [...new Set([...fromPath, ...extra])];
 }
 
-// On Windows, executables carry an extension (claude.exe, claude.cmd, ...).
-// Mirror the shell's PATHEXT resolution so a native-installer claude.exe is
-// found, not just an extensionless npm shim. On POSIX, "" keeps the bare name.
 function binCandidates(bin: string): string[] {
   if (process.platform !== "win32") return [bin];
   const pathext = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD";
@@ -108,10 +130,7 @@ function binCandidates(bin: string): string[] {
     .split(";")
     .map((e) => e.trim())
     .filter(Boolean)
-    // Only include extensions that `child_process.spawn()` can execute directly.
     .filter((e) => [".com", ".exe", ".bat", ".cmd"].includes(e.toLowerCase()));
-
-  // Try the bare name too (some environments provide an extensionless shim).
   return [bin, ...exts.map((ext) => bin + ext)];
 }
 
@@ -133,6 +152,10 @@ export function findBin(bin: string, dirs = searchDirs()): string | null {
 export function detectClis() {
   const dirs = searchDirs();
   return KNOWN.map((c) => {
+    if (c.id === "omlx") {
+      const enabled = localEndpointConfigured();
+      return { id: c.id, name: c.name, run: c.run, url: c.url, installed: enabled, path: enabled ? process.execPath : null };
+    }
     const found = findBin(c.bin, dirs);
     return { id: c.id, name: c.name, run: c.run, url: c.url, installed: !!found, path: found };
   });
@@ -141,6 +164,9 @@ export function detectClis() {
 export function resolveCli(id: string): { spec: CliSpec; binPath: string } | null {
   const spec = KNOWN.find((c) => c.id === id);
   if (!spec) return null;
+  if (id === "omlx") {
+    return localEndpointConfigured() ? { spec, binPath: process.execPath } : null;
+  }
   const binPath = findBin(spec.bin);
   if (!binPath) return null;
   return { spec, binPath };
