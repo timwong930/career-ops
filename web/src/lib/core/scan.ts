@@ -50,7 +50,7 @@ function parseOfferLine(source: string, date: string, rest: string): Omit<Discov
 
 export function scannerSupportsJson(): boolean {
   try {
-    const src = fs.readFileSync(rootScript("scan-ats-full"), "utf8");
+    const src = fs.readFileSync(/*turbopackIgnore: true*/ rootScript("scan-ats-full"), "utf8");
     return src.includes("--json") && src.includes("capHit");
   } catch {
     return false;
@@ -115,7 +115,9 @@ export function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEvent) =>
 
     const offers: DiscoveredOffer[] = [];
     const seen = new Set<string>();
-    let currentAts = ats[0] || "";
+    // Regex captures are plain strings; keep the progress label broad instead of
+    // accidentally inferring the stricter AtsSource union from ats[0].
+    let currentAts: string = ats[0] || "";
     let pending: Omit<DiscoveredOffer, "url"> | null = null;
     let companiesScanned = 0;
     let unreachable = 0;
