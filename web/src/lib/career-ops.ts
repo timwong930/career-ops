@@ -26,14 +26,14 @@ export function careerOpsRoot(): string {
  * as module imports and fails the production build otherwise.
  */
 export function rootScript(nameNoExt: string): string {
-  return path.join(careerOpsRoot(), `${nameNoExt}.mjs`);
+  return path.join(/*turbopackIgnore: true*/ careerOpsRoot(), `${nameNoExt}.mjs`);
 }
 
 // Feature-detect the core's `tracker.mjs delete --num` row-delete (#1200) by probing
 // the local script source — older checkouts lack it, so the delete UI hides itself.
 export function trackerCanDelete(): boolean {
   try {
-    const src = fs.readFileSync(rootScript("tracker"), "utf8");
+    const src = fs.readFileSync(/*turbopackIgnore: true*/ rootScript("tracker"), "utf8");
     return src.includes("delete") && src.includes("--num");
   } catch {
     return false;
@@ -42,7 +42,7 @@ export function trackerCanDelete(): boolean {
 
 function read(rel: string): string | null {
   try {
-    return fs.readFileSync(path.join(careerOpsRoot(), rel), "utf8");
+    return fs.readFileSync(/*turbopackIgnore: true*/ path.join(careerOpsRoot(), rel), "utf8");
   } catch {
     return null;
   }
@@ -178,7 +178,7 @@ export function doctorState(): {
 } {
   const has = (rel: string) => {
     try {
-      return fs.existsSync(path.join(careerOpsRoot(), rel));
+      return fs.existsSync(/*turbopackIgnore: true*/ path.join(careerOpsRoot(), rel));
     } catch {
       return false;
     }
@@ -209,7 +209,7 @@ export function pipelineSummary(): PipelineSummary {
   const scanDates = readScanDates();
   return {
     root,
-    rootExists: fs.existsSync(root),
+    rootExists: fs.existsSync(/*turbopackIgnore: true*/ root),
     // join the freshness date (first_seen) onto each raw posting — the inbox's
     // triage view orders/faceted-filters on it entirely client-side.
     inbox: readInbox().map((j) => ({ ...j, postedAt: j.postedAt ?? scanDates.get(j.url) })),
@@ -252,7 +252,7 @@ export function findReportFile(n: string): string | null {
   }
   let files: string[];
   try {
-    files = fs.readdirSync(path.join(root, "reports"));
+    files = fs.readdirSync(/*turbopackIgnore: true*/ path.join(root, "reports"));
   } catch {
     return null;
   }
@@ -268,7 +268,7 @@ export function findReportFile(n: string): string | null {
  *  planted under data/ or reports/ can't leak files outside the project. */
 function containedRealpath(p: string, root: string): boolean {
   try {
-    return fs.realpathSync(p).startsWith(fs.realpathSync(root) + path.sep);
+    return fs.realpathSync(/*turbopackIgnore: true*/ p).startsWith(fs.realpathSync(/*turbopackIgnore: true*/ root) + path.sep);
   } catch {
     return false; // missing file or unresolvable link — treat as not found
   }
@@ -278,7 +278,7 @@ export function readReport(n: string): ReportData | null {
   const file = findReportFile(n);
   if (!file) return null;
   try {
-    return { content: fs.readFileSync(file, "utf8"), file: path.basename(file) };
+    return { content: fs.readFileSync(/*turbopackIgnore: true*/ file, "utf8"), file: path.basename(file) };
   } catch {
     return null;
   }
@@ -292,7 +292,7 @@ export function findApplication(n: string): Application | null {
  *  web assistant learns go HERE (single source of truth) inside a managed marker
  *  block — so the CLI sees them too. No web-only memory store (that would drift). */
 export function profilePath(): string {
-  return path.join(careerOpsRoot(), "modes", "_profile.md");
+  return path.join(/*turbopackIgnore: true*/ careerOpsRoot(), "modes", "_profile.md");
 }
 
 const NOTES_START = "<!-- co-web-notes:start -->";
@@ -303,7 +303,7 @@ const NOTES_END = "<!-- co-web-notes:end -->";
  *  to the legacy web-only memory file for back-compat. */
 export function readMemory(): string {
   try {
-    const md = fs.readFileSync(profilePath(), "utf8");
+    const md = fs.readFileSync(/*turbopackIgnore: true*/ profilePath(), "utf8");
     const i = md.indexOf(NOTES_START);
     const j = md.indexOf(NOTES_END);
     if (i !== -1 && j !== -1 && j > i) return md.slice(i + NOTES_START.length, j).trim();
@@ -311,7 +311,7 @@ export function readMemory(): string {
     /* no _profile.md yet */
   }
   try {
-    return fs.readFileSync(path.join(careerOpsRoot(), ".career-ops-web", "memory.md"), "utf8").trim();
+    return fs.readFileSync(/*turbopackIgnore: true*/ path.join(careerOpsRoot(), ".career-ops-web", "memory.md"), "utf8").trim();
   } catch {
     return "";
   }
@@ -327,7 +327,7 @@ export function rememberFact(fact: string): "ok" | "deduped" | "error" {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     let md = "";
     try {
-      md = fs.readFileSync(p, "utf8");
+      md = fs.readFileSync(/*turbopackIgnore: true*/ p, "utf8");
     } catch {
       md = "";
     }
