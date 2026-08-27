@@ -32,15 +32,22 @@ function toOffer(raw: unknown): DiscoveredOffer | null {
   if (!/^https?:\/\//i.test(url)) return null;
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   const conf = o.confidence;
+  const source = str(o.source) || "ai-search";
+  const posted = str(o.postedAt);
+  // CLI web-hunt offers remain explicitly unverified. Local-endpoint AI search,
+  // however, ranks offers that the deterministic ATS scanner already retrieved
+  // from live board APIs; those can preserve their posted date/source and omit
+  // the unconfirmed badge instead of being downgraded by the shared parser.
+  const verification = o.verification === "unconfirmed" || source === "ai-search" ? "unconfirmed" as const : undefined;
   return {
     url,
     company: str(o.company),
     title: str(o.title),
     location: str(o.location),
-    postedAt: "", // AI gives only a human postedHint, never a trustworthy date
+    postedAt: /^\d{4}-\d{2}-\d{2}$/.test(posted) ? posted : "",
     ats: str(o.ats) || "other",
-    source: "ai-search",
-    verification: "unconfirmed",
+    source,
+    verification,
     why: str(o.why) || undefined,
     postedHint: str(o.postedHint) || undefined,
     confidence: conf === "low" || conf === "medium" || conf === "high" ? conf : undefined,

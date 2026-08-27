@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { CoMark } from "@/components/co-mark";
 import { AssistantConsole } from "@/components/assistant-console";
+import { AiProviderBridge } from "@/components/ai-provider-bridge";
 import { MobileNav } from "@/components/mobile-nav";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { JobsProvider } from "@/components/jobs/job-store";
@@ -25,6 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <PipelineProvider>
       <ApplyProvider>
       <ExploreProvider>
+      <AiProviderBridge />
       <MobileNav />
       <div className="flex min-h-screen">
         <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface/30 p-4 md:flex">

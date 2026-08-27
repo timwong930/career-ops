@@ -8,9 +8,6 @@ import { AiHuntTrace } from "./ai-hunt-trace";
 import { DiscoveryCard } from "./discovery-card";
 import { useExplore } from "./explore-provider";
 
-// The AI hunt surface — apply-mode polish: an animated orb, a serif headline that
-// folds in the live count (no lonely giant "0"), a brand-orange effort ledger
-// (NEVER a fake $0), the CONTAINED reasoning panel, and cards materializing below.
 const STYLE = `
 .co-aihunt{position:relative;z-index:1;display:flex;min-height:72vh;flex-direction:column;align-items:center;gap:1.2rem;padding:2.5rem 1rem 2rem;text-align:center}
 .co-aiorb{position:relative;display:grid;place-items:center;width:4rem;height:4rem}
@@ -24,9 +21,11 @@ html.dark .co-ailedger{color:hsl(26 86% 67%)}
 `;
 
 export function AiHuntView({ cliName }: { cliName?: string }) {
-  const { phase, matchCount, aiTrace, aiCost, offers } = useExplore();
+  const { phase, matchCount, aiTrace, aiCost, offers, aiProviderMode, aiProviderName } = useExplore();
   const shown = useCountUp(matchCount);
   const revealing = phase === "revealing";
+  const local = aiProviderMode === "endpoint";
+  const provider = aiProviderName || cliName || (local ? "local AI" : "your AI");
 
   return (
     <>
@@ -42,17 +41,23 @@ export function AiHuntView({ cliName }: { cliName?: string }) {
 
         <div>
           <h2 className={`${instrumentSerif.className} text-3xl leading-tight text-foreground`}>
-            {matchCount > 0 ? `${shown} candidate${shown === 1 ? "" : "s"}` : "Hunting the open web"}
+            {matchCount > 0 ? `${shown} candidate${shown === 1 ? "" : "s"}` : local ? "Searching public ATS boards" : "Hunting the open web"}
           </h2>
           <p className="mt-1 text-sm text-muted">
-            {revealing ? "found — review them below" : matchCount > 0 ? "found so far · streaming in" : "casting across the public web…"}
+            {revealing
+              ? "found — review them below"
+              : matchCount > 0
+                ? "found so far · streaming in"
+                : local
+                  ? "Career-Ops retrieves the jobs; your local model plans and ranks them…"
+                  : "casting across the public web…"}
           </p>
         </div>
 
         <div className="co-ailedger">
           <Sparkles className="size-3.5" />
-          {cliName || "your CLI"} · searching the open web
-          {aiCost.searches > 0 && <span className="opacity-75">· {aiCost.searches} searches</span>}
+          {provider} · {local ? "local ranking + ATS retrieval" : "searching the open web"}
+          {aiCost.searches > 0 && <span className="opacity-75">· {aiCost.searches} search steps</span>}
           {matchCount > 0 && <span className="opacity-75">· {matchCount} found</span>}
         </div>
 
